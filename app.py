@@ -339,7 +339,7 @@ with st.sidebar:
     st.markdown("### About")
     st.markdown("""
     This enhanced search engine uses:
-    - GPT-4 for query understanding
+    - Cosine Similarity and LLM for query understanding
     - Advanced semantic search
     - Multi-vector matching
     - Relevance filtering
@@ -350,7 +350,7 @@ with st.sidebar:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666;'>
-    <small>Powered by OpenAI GPT-4 and Pinecone | Last updated: February 2024</small>
+    <small>Powered by Embeddings and Pinecone | Last updated: February 2024</small>
 </div>
 """, unsafe_allow_html=True)
 
