@@ -1,12 +1,12 @@
 import streamlit as st
+from openai import OpenAI
 import pinecone
-import openai
 from datetime import datetime
 
 # Initialize OpenAI with secrets
-openai.api_key = st.secrets["openai_api_key"]
+client = OpenAI(api_key=st.secrets["openai_api_key"])
 
-# Initialize Pinecone 
+# Initialize Pinecone with the latest method
 pinecone_key = st.secrets["pinecone_api_key"]
 pc = pinecone.Pinecone(api_key=pinecone_key)
 
@@ -14,11 +14,11 @@ pc = pinecone.Pinecone(api_key=pinecone_key)
 index = pc.Index("newsbot2")
 
 def get_embedding(text):
-    response = openai.Embedding.create(
+    response = client.embeddings.create(
         input=text,
         model="text-embedding-ada-002"
     )
-    return response['data'][0]['embedding']
+    return response.data[0].embedding
 
 def search_news(query, top_k=5):
     # Get embedding for the query
