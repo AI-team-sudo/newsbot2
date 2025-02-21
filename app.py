@@ -3,11 +3,6 @@ from openai import OpenAI
 import pinecone
 from datetime import datetime
 import json
-import logging
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Initialize OpenAI with secrets
 client = OpenAI(api_key=st.secrets["openai_api_key"])
@@ -19,8 +14,6 @@ index = pc.Index("newsbot2")
 
 def truncate_text(text, max_length=300):
     """Truncate text to a maximum length while keeping whole words."""
-    if not text:
-        return ""
     if len(text) <= max_length:
         return text
     return text[:max_length].rsplit(' ', 1)[0] + '...'
@@ -63,7 +56,6 @@ def enhance_query_with_gpt4(query, language="both"):
             'context': result.get('CONTEXT', '')
         }
     except Exception as e:
-        logger.error(f"Error in query enhancement: {str(e)}")
         st.error(f"Error in query enhancement: {str(e)}")
         return {
             'original_query': query,
@@ -80,15 +72,14 @@ def get_embedding(text):
         )
         return response.data[0].embedding
     except Exception as e:
-        logger.error(f"Error generating embedding: {str(e)}")
         st.error(f"Error generating embedding: {str(e)}")
         return None
 
 def filter_results_with_gpt4(query_context, results, threshold=0.7):
     results_text = ""
-    for i, match in enumerate(results.matches[:5]):
-        title = truncate_text(match.metadata.get('title', ''), 100)
-        content = truncate_text(match.metadata.get('content', ''), 200)
+    for i, match in enumerate(results.matches[:5]):  # Limit to top 5 results
+        title = truncate_text(match.metadata['title'], 100)
+        content = truncate_text(match.metadata['content'], 200)
         results_text += f"\nArticle {i+1}:\nTitle: {title}\nContent: {content}\nScore: {match.score:.2f}\n"
 
     system_prompt = """
@@ -145,7 +136,6 @@ def filter_results_with_gpt4(query_context, results, threshold=0.7):
         return parsed_results
 
     except Exception as e:
-        logger.error(f"Error in filtering results: {str(e)}")
         st.error(f"Error in filtering results: {str(e)}")
         return {'results': [{'article_index': i+1, 'relevance_score': match.score,
                            'explanation': 'Direct match'}
@@ -153,13 +143,16 @@ def filter_results_with_gpt4(query_context, results, threshold=0.7):
 
 def semantic_search(query, top_k=5):
     enhanced_query_data = enhance_query_with_gpt4(query)
+
     search_terms = enhanced_query_data['search_terms'][:3]
     search_vectors = []
 
+    # Get embedding for enhanced query
     main_embedding = get_embedding(enhanced_query_data['enhanced_query'])
     if main_embedding:
         search_vectors.append(main_embedding)
 
+    # Get embeddings for search terms
     for term in search_terms:
         if term:
             term_embedding = get_embedding(term)
@@ -170,6 +163,7 @@ def semantic_search(query, top_k=5):
         st.error("Failed to generate embeddings for search")
         return None, None, None
 
+    # Search Pinecone with multiple vectors
     all_results = []
     for vector in search_vectors:
         try:
@@ -180,10 +174,10 @@ def semantic_search(query, top_k=5):
             )
             all_results.extend(results.matches)
         except Exception as e:
-            logger.error(f"Error querying Pinecone: {str(e)}")
             st.error(f"Error querying Pinecone: {str(e)}")
             continue
 
+    # Remove duplicates and sort by score
     seen_ids = set()
     unique_results = []
     for result in all_results:
@@ -198,24 +192,13 @@ def semantic_search(query, top_k=5):
         st.warning("No results found")
         return enhanced_query_data, {'results': []}, []
 
+    # Filter results using GPT-4
     filtered_results = filter_results_with_gpt4(
         enhanced_query_data['context'],
         type('Results', (), {'matches': unique_results})()
     )
 
     return enhanced_query_data, filtered_results, unique_results
-
-def log_metadata_issues(metadata, article_id):
-    issues = []
-    if not metadata.get('title'):
-        issues.append('Missing title')
-    if not metadata.get('content'):
-        issues.append('Missing content')
-    if not metadata.get('date'):
-        issues.append('Missing date')
-    if issues:
-        logger.warning(f"Article {article_id} has metadata issues: {', '.join(issues)}")
-        st.warning(f"Article {article_id} has metadata issues: {', '.join(issues)}")
 
 # Streamlit UI
 st.set_page_config(
@@ -224,7 +207,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS
+# Custom CSS with improved styling
 st.markdown("""
     <style>
     .stTitle {
@@ -273,7 +256,7 @@ st.markdown("""
 
 st.title("ગુજરાતી સમાચાર શોધ એન્જિન / Enhanced Gujarati News Search Engine")
 
-# Search interface
+# Search interface with improved layout
 col1, col2, col3 = st.columns([3, 1, 1])
 with col1:
     query = st.text_input("Enter your search query (English or ગુજરાતી માં):", "")
@@ -282,7 +265,7 @@ with col2:
 with col3:
     threshold = st.slider("Relevance threshold:", 0.0, 1.0, 0.7, 0.1)
 
-# Search button
+# Search button with error handling
 if st.button("Search", type="primary"):
     if not query:
         st.warning("Please enter a search query.")
@@ -292,6 +275,7 @@ if st.button("Search", type="primary"):
                 enhanced_query_data, filtered_results, all_results = semantic_search(query, top_k)
 
                 if enhanced_query_data and filtered_results and all_results:
+                    # Display query enhancement details in a collapsible section
                     with st.expander("🔍 Search Enhancement Details"):
                         st.markdown("### Query Analysis")
                         st.markdown(f"**Original Query:** {enhanced_query_data['original_query']}")
@@ -301,47 +285,26 @@ if st.button("Search", type="primary"):
                             st.markdown(f"- {term}")
                         st.markdown(f"**Context:** {enhanced_query_data['context']}")
 
+                    # Display results count
                     result_count = len(filtered_results.get('results', []))
                     st.subheader(f"Found {result_count} relevant results")
 
+                    # Display filtered results with improved formatting
                     if result_count > 0:
                         for result in filtered_results['results']:
                             article_idx = result['article_index'] - 1
                             if article_idx < len(all_results):
                                 article = all_results[article_idx]
                                 metadata = article.metadata
-                                log_metadata_issues(metadata, article.id)
-
-                                # Clean and validate metadata
-                                title = metadata.get('title', '').strip()
-                                if not title:
-                                    title = "Untitled Article"
-
-                                date = metadata.get('date', '')
-                                if date:
-                                    try:
-                                        parsed_date = datetime.strptime(date, '%Y-%m-%d')
-                                        formatted_date = parsed_date.strftime('%B %d, %Y')
-                                    except:
-                                        formatted_date = date
-                                else:
-                                    formatted_date = 'Date not available'
-
-                                content = metadata.get('content', '').strip()
-                                if not content:
-                                    content = "Content not available"
-
-                                link = metadata.get('link', '#')
-                                link_text = f"""<p><a href="{link}" target="_blank">
-                                    વધુ વાંચો (Read more) →
-                                </a></p>""" if link and link != '#' else ""
 
                                 st.markdown(f"""
                                     <div class="news-card">
-                                        <h3>{title}</h3>
-                                        <p><em>{formatted_date}</em></p>
-                                        <p>{content}</p>
-                                        {link_text}
+                                        <h3>{metadata['title']}</h3>
+                                        <p><em>{metadata.get('date', 'Date not available')}</em></p>
+                                        <p>{metadata['content']}</p>
+                                        <p><a href="{metadata.get('link', '#')}" target="_blank">
+                                            વધુ વાંચો (Read more) →
+                                        </a></p>
                                         <div class="relevance-score">
                                             Relevance Score: {result['relevance_score']:.2f}
                                         </div>
@@ -354,7 +317,6 @@ if st.button("Search", type="primary"):
                         st.info("No results met the relevance threshold. Try adjusting the threshold or modifying your search query.")
 
         except Exception as e:
-            logger.error(f"Search error: {str(e)}")
             st.error(f"""
                 An error occurred while processing your search.
                 Error details: {str(e)}
@@ -364,7 +326,7 @@ if st.button("Search", type="primary"):
                 3. Trying again in a few moments
             """)
 
-# Sidebar
+# Sidebar with additional information and settings
 with st.sidebar:
     st.markdown("### Search Tips")
     st.markdown("""
@@ -377,7 +339,7 @@ with st.sidebar:
     st.markdown("### About")
     st.markdown("""
     This enhanced search engine uses:
-    - Cosine Similarity and LLM for query understanding
+    - GPT-4 for query understanding
     - Advanced semantic search
     - Multi-vector matching
     - Relevance filtering
@@ -388,7 +350,7 @@ with st.sidebar:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666;'>
-    <small>Powered by Embeddings and Pinecone | Last updated: February 2024</small>
+    <small>Powered by OpenAI GPT-4 and Pinecone | Last updated: February 2024</small>
 </div>
 """, unsafe_allow_html=True)
 
