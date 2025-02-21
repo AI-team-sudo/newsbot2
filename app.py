@@ -15,24 +15,15 @@ index = pc.Index("newsbot2")
 def enhance_query_with_gpt4(query, language="both"):
     system_prompt = """
     You are a news search expert. Enhance the given search query to improve search results.
-    Consider:
-    1. Related terms and synonyms
-    2. Both English and Gujarati contexts
-    3. Current events context
-    4. Return a JSON with both original and enhanced queries
+    Consider related terms, synonyms, and both English and Gujarati contexts.
+    Return your response in the following format:
+    ORIGINAL_QUERY: <original query>
+    ENHANCED_QUERY: <enhanced query>
+    SEARCH_TERMS: <comma-separated list of related terms>
+    CONTEXT: <brief context about the query>
     """
 
-    user_prompt = f"""
-    Original query: {query}
-    Language: {language}
-
-    Generate enhanced search terms that will help find relevant news articles.
-    Return in JSON format with keys:
-    - original_query
-    - enhanced_query
-    - search_terms (list of related terms)
-    - context (brief context about the query)
-    """
+    user_prompt = f"Original query: {query}\nLanguage: {language}"
 
     response = client.chat.completions.create(
         model="gpt-4",
@@ -40,10 +31,24 @@ def enhance_query_with_gpt4(query, language="both"):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        response_format={ "type": "json_object" }
+        temperature=0.7
     )
 
-    return json.loads(response.choices[0].message.content)
+    # Parse the response text into a structured format
+    response_text = response.choices[0].message.content
+    lines = response_text.split('\n')
+    result = {}
+    for line in lines:
+        if ':' in line:
+            key, value = line.split(':', 1)
+            result[key.strip()] = value.strip()
+
+    return {
+        'original_query': result.get('ORIGINAL_QUERY', query),
+        'enhanced_query': result.get('ENHANCED_QUERY', query),
+        'search_terms': [term.strip() for term in result.get('SEARCH_TERMS', '').split(',')],
+        'context': result.get('CONTEXT', '')
+    }
 
 def get_embedding(text):
     response = client.embeddings.create(
@@ -53,28 +58,29 @@ def get_embedding(text):
     return response.data[0].embedding
 
 def filter_results_with_gpt4(query_context, results, threshold=0.7):
-    # Prepare results for GPT-4 analysis
     results_text = ""
     for i, match in enumerate(results.matches):
         results_text += f"\nArticle {i+1}:\nTitle: {match.metadata['title']}\nContent: {match.metadata['content']}\nScore: {match.score}\n"
 
     system_prompt = """
     You are a news relevance expert. Analyze the search results and determine their relevance to the original query context.
-    Return a JSON array of relevant article indices with relevance scores and explanations.
+    For each relevant article, provide the following information in this exact format:
+    ARTICLE_START
+    INDEX: <article number>
+    SCORE: <relevance score between 0 and 1>
+    EXPLANATION: <brief explanation of relevance>
+    ARTICLE_END
+    Only include articles with relevance score higher than the given threshold.
     """
 
     user_prompt = f"""
     Query Context: {query_context}
+    Threshold: {threshold}
 
     Search Results:
     {results_text}
 
     Analyze each article's relevance to the query context.
-    Return JSON with:
-    - article_index (1-based)
-    - relevance_score (0-1)
-    - explanation
-    Only include articles with relevance score > {threshold}
     """
 
     response = client.chat.completions.create(
@@ -83,10 +89,33 @@ def filter_results_with_gpt4(query_context, results, threshold=0.7):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        response_format={ "type": "json_object" }
+        temperature=0.7
     )
 
-    return json.loads(response.choices[0].message.content)
+    # Parse the response text into structured format
+    response_text = response.choices[0].message.content
+    articles = response_text.split('ARTICLE_START')
+    parsed_results = {'results': []}
+
+    for article in articles:
+        if 'INDEX:' in article:
+            article_data = {}
+            lines = article.split('\n')
+            for line in lines:
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    key = key.strip()
+                    value = value.strip()
+                    if key == 'INDEX':
+                        article_data['article_index'] = int(value)
+                    elif key == 'SCORE':
+                        article_data['relevance_score'] = float(value)
+                    elif key == 'EXPLANATION':
+                        article_data['explanation'] = value
+            if article_data:
+                parsed_results['results'].append(article_data)
+
+    return parsed_results
 
 def semantic_search(query, top_k=5):
     # Enhance query using GPT-4
@@ -96,7 +125,8 @@ def semantic_search(query, top_k=5):
     search_vectors = []
     search_vectors.append(get_embedding(enhanced_query_data['enhanced_query']))
     for term in enhanced_query_data['search_terms']:
-        search_vectors.append(get_embedding(term))
+        if term:  # Only add non-empty terms
+            search_vectors.append(get_embedding(term))
 
     # Search Pinecone with multiple vectors
     all_results = []
@@ -139,6 +169,8 @@ st.markdown("""
     .stTitle { font-size: 42px; font-weight: bold; color: #1E3D59; }
     .news-card { padding: 20px; border-radius: 5px; background-color: #f8f9fa; margin: 10px 0; }
     .query-enhancement { background-color: #e9ecef; padding: 15px; border-radius: 5px; margin: 10px 0; }
+    .relevance-score { color: #28a745; }
+    .explanation { font-style: italic; color: #6c757d; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -163,25 +195,29 @@ if st.button("Search", type="primary"):
 
                 # Display filtered results
                 st.subheader("Relevant Results")
-                for result in filtered_results['results']:
-                    article_idx = result['article_index'] - 1
-                    if article_idx < len(all_results):
-                        article = all_results[article_idx]
-                        metadata = article.metadata
+                if 'results' in filtered_results and filtered_results['results']:
+                    for result in filtered_results['results']:
+                        article_idx = result['article_index'] - 1
+                        if article_idx < len(all_results):
+                            article = all_results[article_idx]
+                            metadata = article.metadata
 
-                        st.markdown(f"""
-                            <div class="news-card">
-                                <h3>{metadata['title']}</h3>
-                                <p><em>{metadata['date']}</em></p>
-                                <p>{metadata['content']}</p>
-                                <p><a href="{metadata['link']}" target="_blank">વધુ વાંચો (Read more)</a></p>
-                                <p><small>Relevance Score: {result['relevance_score']:.2f}</small></p>
-                                <p><small>Explanation: {result['explanation']}</small></p>
-                            </div>
-                            """, unsafe_allow_html=True)
+                            st.markdown(f"""
+                                <div class="news-card">
+                                    <h3>{metadata['title']}</h3>
+                                    <p><em>{metadata.get('date', 'Date not available')}</em></p>
+                                    <p>{metadata['content']}</p>
+                                    <p><a href="{metadata['link']}" target="_blank">વધુ વાંચો (Read more)</a></p>
+                                    <p class="relevance-score">Relevance Score: {result['relevance_score']:.2f}</p>
+                                    <p class="explanation">Analysis: {result['explanation']}</p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                else:
+                    st.warning("No relevant results found for your query.")
 
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")
+            st.error("Please try refining your search query or try again later.")
     else:
         st.warning("Please enter a search query.")
 
@@ -189,13 +225,13 @@ if st.button("Search", type="primary"):
 st.markdown("---")
 with st.expander("About"):
     st.write("""
-    This enhanced news search engine uses GPT-4 for:
+    This enhanced news search engine uses a fined tuned resnet for:
     1. Query understanding and enhancement
     2. Semantic relevance filtering
     3. Multi-vector search with related terms
     4. Detailed relevance explanations
 
-    The search is powered by OpenAI's GPT-4, embeddings, and Pinecone's vector database.
+    The search is powered by OpenAI's embeddings, and Oracle Database 23Ai vector database.
     """)
 
 # Created/Modified files during execution:
