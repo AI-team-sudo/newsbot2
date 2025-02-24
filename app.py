@@ -10,7 +10,7 @@ client = OpenAI(api_key=st.secrets["openai_api_key"])
 # Initialize Pinecone
 pinecone_key = st.secrets["pinecone_api_key"]
 pc = pinecone.Pinecone(api_key=pinecone_key)
-index = pc.Index("newsbot2")
+index = pc.Index("newsbot")
 
 def truncate_text(text, max_length=300):
     """Truncate text to a maximum length while keeping whole words."""
